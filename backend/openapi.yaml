@@ -1,0 +1,269 @@
+openapi: 3.0.3
+info:
+  title: Plant Care & Environmental Safety System,  Backend API
+  description: >
+    REST API for the IoT Data Management System. Devices submit sensor
+    readings authenticated by a shared API key; dashboard users authenticate
+    with JWT to read live and historical data.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:5000/api/v1
+    description: Local development server
+  - url: http://gbc.mw/api/v1
+    description: Remote server
+
+tags:
+  - name: Auth
+    description: Dashboard user authentication
+  - name: Sensor Data
+    description: Device data ingestion and retrieval
+
+paths:
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in as a dashboard user
+      description: Returns a JWT to be used as a Bearer token on protected endpoints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  example: kenani
+                password:
+                  type: string
+                  format: password
+                  example: yourpassword123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  expiresIn:
+                    type: string
+                    example: 2h
+        '400':
+          description: Missing username or password
+          content:
+            application/json:
+              example:
+                error: Username and password are required.
+        '401':
+          description: Invalid username or password
+          content:
+            application/json:
+              example:
+                error: Invalid username or password.
+        '500':
+          description: Server error during login
+          content:
+            application/json:
+              example:
+                error: Login failed. Please try again.
+
+  /sensor-data:
+    post:
+      tags: [Sensor Data]
+      summary: Submit a sensor reading (device-facing)
+      description: >
+        Called by the ESP32 device. Authenticated with a shared API key
+        (x-api-key header), not JWT — devices don't log in, they present
+        a fixed shared secret.
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, moisture, temperature, gas]
+              properties:
+                deviceId:
+                  type: string
+                  example: sensor-01
+                moisture:
+                  type: number
+                  description: Soil moisture percentage (0–100)
+                  example: 42.5
+                temperature:
+                  type: number
+                  description: Ambient temperature in °C
+                  example: 24.1
+                gas:
+                  type: boolean
+                  description: >
+                    Digital gas/flame detection flag — true if the sensor's
+                    threshold was exceeded (hazard detected), false otherwise.
+                    The sensor is configured for digital output, not an
+                    analogue concentration reading.
+                  example: false
+      responses:
+        '201':
+          description: Reading recorded successfully
+          content:
+            application/json:
+              example:
+                message: Reading recorded.
+                id: "-P32ZySw-rCxoWEdGkdJ"
+        '400':
+          description: Invalid or missing fields in the payload
+          content:
+            application/json:
+              example:
+                error: Invalid sensor payload.
+                details:
+                  - "moisture is required and must be a number between 0 and 100."
+        '401':
+          description: Missing API key
+          content:
+            application/json:
+              example:
+                error: Missing API key. Include it in the x-api-key header.
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              example:
+                error: Invalid API key.
+        '500':
+          description: Server/database error while saving the reading
+          content:
+            application/json:
+              example:
+                error: Could not save reading. Please try again.
+
+  /devices:
+    get:
+      tags: [Sensor Data]
+      summary: List known device IDs (dashboard-facing)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of device IDs
+          content:
+            application/json:
+              example:
+                devices: ["sensor-01"]
+        '401':
+          description: Missing or malformed Authorization header
+          content:
+            application/json:
+              example:
+                error: "Missing or malformed Authorization header. Expected: Bearer <token>."
+        '403':
+          description: Invalid or expired token
+          content:
+            application/json:
+              example:
+                error: Invalid or expired token. Please log in again.
+
+  /sensor-data/{deviceId}/latest:
+    get:
+      tags: [Sensor Data]
+      summary: Get the most recent reading for a device (dashboard-facing)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: sensor-01
+      responses:
+        '200':
+          description: Most recent reading
+          content:
+            application/json:
+              example:
+                id: "-P32ZySw-rCxoWEdGkdJ"
+                moisture: 42.5
+                temperature: 24.1
+                gas: false
+                timestamp: "2026-10-03T21:03:07.198Z"
+        '401':
+          description: Missing or malformed Authorization header
+        '403':
+          description: Invalid or expired token
+        '404':
+          description: No readings exist yet for this device
+          content:
+            application/json:
+              example:
+                error: "No readings found for device \"sensor-01\"."
+
+  /sensor-data/{deviceId}/history:
+    get:
+      tags: [Sensor Data]
+      summary: Get recent reading history for a device (dashboard-facing)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: sensor-01
+        - name: limit
+          in: query
+          required: false
+          description: Number of readings to return (default 50, max 500)
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+          example: 10
+      responses:
+        '200':
+          description: Historical readings, oldest first
+          content:
+            application/json:
+              example:
+                deviceId: sensor-01
+                count: 2
+                readings:
+                  - id: "-P32ZuW-2msvZmYmJWrD"
+                    moisture: 42.5
+                    temperature: 24.1
+                    gas: false
+                    timestamp: "2026-10-03T21:02:50.945Z"
+                  - id: "-P32ZySw-rCxoWEdGkdJ"
+                    moisture: 42.5
+                    temperature: 24.1
+                    gas: false
+                    timestamp: "2026-10-03T21:03:07.198Z"
+        '401':
+          description: Missing or malformed Authorization header
+        '403':
+          description: Invalid or expired token
+        '404':
+          description: No readings exist yet for this device
+
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: Shared secret the ESP32 device sends with every sensor reading.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtained from POST /auth/login, used by the dashboard.
